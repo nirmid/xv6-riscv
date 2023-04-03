@@ -16,6 +16,8 @@ void kernelvec();
 
 extern int devintr();
 
+void update_fields(); // might need extern ex.6
+
 void trapinit(void)
 {
   initlock(&tickslock, "time");
@@ -237,5 +239,21 @@ int devintr()
   else
   {
     return 0;
+  }
+}
+
+void update_fields()
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);
+    if (p->state == RUNNABLE)
+      p->retime += 1;
+    else if (p->state == RUNNING)
+      p->rtime += 1;
+    else if (p->state == SLEEPING)
+      p->stime += 1;
+    release(&p->lock);
   }
 }

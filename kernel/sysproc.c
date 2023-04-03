@@ -61,11 +61,6 @@ sys_sleep(void)
   argint(0, &n);
   acquire(&tickslock);
   ticks0 = ticks;
-
-  struct proc *p = myproc(); // ex.6
-  acquire(&p->lock);
-  p->stime += p->stime + n;
-
   while (ticks - ticks0 < n)
   {
     if (killed(myproc()))
