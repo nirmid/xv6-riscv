@@ -17,6 +17,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+static int sched_policy = 2;
 
 extern char trampoline[]; // trampoline.S
 
@@ -100,6 +101,34 @@ int allocpid()
   return pid;
 }
 
+static long long get_min_acc(struct proc *p)
+{
+  struct proc *pp;
+  long long min_acc = 9223372036854775807;
+  int proc_count = 0;
+  for (pp = proc; pp < &proc[NPROC]; pp++)
+  {
+    if (pp != p)
+    {
+      acquire(&pp->lock);
+      if (pp->state == RUNNABLE || pp->state == RUNNING)
+      {
+        proc_count += 1;
+        if (pp->accumulator < min_acc)
+        {
+          min_acc = pp->accumulator;
+        }
+      }
+      release(&pp->lock);
+    }
+  }
+  if (proc_count == 0)
+  {
+    return 0;
+  }
+  return min_acc;
+}
+
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -125,6 +154,15 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  // ex.5
+  p->ps_priority = 5;
+  p->accumulator = get_min_acc(p);
+  // ex.6
+  p->cfs_priority = 100;
+  p->retime = 0;
+  p->stime = 0;
+  p->rtime = 0;
+
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -173,6 +211,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->accumulator = 0;
+  p->ps_priority = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -251,7 +291,6 @@ void userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
-
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -318,7 +357,7 @@ int fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
-
+  np->cfs_priority = p->cfs_priority;
   release(&np->lock);
 
   acquire(&wait_lock);
@@ -351,7 +390,7 @@ void reparent(struct proc *p)
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
-void exit(int status, char *exit_msg)
+void exit(int status, const char *exit_msg)
 {
   struct proc *p = myproc();
 
@@ -388,8 +427,7 @@ void exit(int status, char *exit_msg)
   p->state = ZOMBIE;
 
   // Adding exit message
-  p->xmessage = malloc(strlen(exit_msg) + 1); // allocate memory for the string
-  strncpy(p->xmessage, exit_msg, MAXPATH);    // copy the string to xmessage
+  strncpy(p->xmessage, exit_msg, 32); // copy the string to xmessage
 
   release(&wait_lock);
 
@@ -424,7 +462,7 @@ int wait(uint64 addr, uint64 exit_msg)
         {
           // Found one.
           pid = pp->pid;
-          if (addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate, sizeof(pp->xstate)) < 0 && exit_msg != 0 && copyout(p->pagetable, exit_msg, (char *)&pp->xmessage, sizeof(pp->xmessage)) < 0)
+          if ((addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate, sizeof(pp->xstate)) < 0) || (exit_msg != 0 && copyout(p->pagetable, exit_msg, (char *)&pp->xmessage, sizeof(pp->xmessage)) < 0))
           {
             release(&pp->lock);
             release(&wait_lock);
@@ -462,30 +500,83 @@ void scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
+  struct proc *min_acc_proc;
+  long long min_acc;
   c->proc = 0;
   for (;;)
   {
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-
-    for (p = proc; p < &proc[NPROC]; p++)
-    {
-      acquire(&p->lock);
-      if (p->state == RUNNABLE)
+    if (sched_policy == 0)
+    { // case default loop
+      for (p = proc; p < &proc[NPROC]; p++)
       {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+        acquire(&p->lock);
+        if (p->state == RUNNABLE)
+        {
+          // Switch to chosen process.  It is the process's job
+          // to release its lock and then reacquire it
+          // before jumping back to us.
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
 
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
+        }
+        release(&p->lock);
+      }
+    }
+    else if (sched_policy == 1)
+    { // case ex.5 loop
+      // scheduling
+      min_acc = 9223372036854775807;
+      min_acc_proc = 0 for (p = proc; p < &proc[NPROC]; p++)
+      {
+        acquire(&p->lock);
+        if (p->state == RUNNABLE && p->accumulator < min_acc)
+        {
+          if (min_acc_proc != 0)
+          {
+            release(&min_acc_proc->lock);
+          }
+          min_acc_proc = p;
+          min_acc = p->accumulator;
+          // // Switch to chosen process.  It is the process's job
+          // // to release its lock and then reacquire it
+          // // before jumping back to us.
+          // p->state = RUNNING;              // need to move it
+          // c->proc = p;                     // need to move it
+          // swtch(&c->context, &p->context); // need to move it
+
+          // // Process is done running for now.
+          // // It should have changed its p->state before coming back.
+          // c->proc = 0;
+        }
+        else
+        {
+          release(&p->lock);
+        }
+      }
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      // schedualinggg
+      // Setting lowest acc procces to running
+      if (min_acc_proc != 0)
+      {
+        min_acc_proc->state = RUNNING;
+        c->proc = min_acc_proc;
+        swtch(&c->context, &min_acc_proc->context);
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        release(&min_acc_proc->lock);
       }
-      release(&p->lock);
+    }
+    else
+    { // case ex.6 loop
     }
   }
 }
@@ -590,6 +681,8 @@ void wakeup(void *chan)
       acquire(&p->lock);
       if (p->state == SLEEPING && p->chan == chan)
       {
+        // scheduling
+        p->accumulator = get_min_acc(p);
         p->state = RUNNABLE;
       }
       release(&p->lock);
@@ -701,4 +794,15 @@ void procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int set_priority(int priority)
+{
+  struct proc *p = myproc();
+  if (priority > 0 && priority < 11)
+  {
+    p->ps_priority = priority;
+    return priority;
+  }
+  return -1;
 }

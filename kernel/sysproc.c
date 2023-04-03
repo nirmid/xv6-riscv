@@ -10,9 +10,9 @@ uint64
 sys_exit(void)
 {
   int n;
-  char *exit_msg;
+  char exit_msg[32];
   argint(0, &n);
-  argstr(1, exit_msg, MAXPATH);
+  argstr(1, exit_msg, 32);
   exit(n, exit_msg);
   return 0; // not reached
 }
@@ -61,6 +61,11 @@ sys_sleep(void)
   argint(0, &n);
   acquire(&tickslock);
   ticks0 = ticks;
+
+  struct proc *p = myproc(); // ex.6
+  acquire(&p->lock);
+  p->stime += p->stime + n;
+
   while (ticks - ticks0 < n)
   {
     if (killed(myproc()))
@@ -99,4 +104,11 @@ sys_uptime(void)
 uint64 sys_memsize(void)
 {
   return myproc()->sz;
+}
+
+uint64 sys_set_ps_priority(void)
+{
+  int n;
+  argint(0, &n);
+  return set_priority(n);
 }
